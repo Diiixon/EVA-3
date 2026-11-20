@@ -96,7 +96,7 @@ pipeline {
                         -v "$HOST_REPORT_DIR:/zap/wrk/:rw" \
                         ghcr.io/zaproxy/zaproxy:stable \
                         zap-full-scan.py \
-                        -t http://localhost:5001:${TEST_PORT} \
+                        -t http://localhost:${TEST_PORT} \
                         -m 1 \
                         -T 3 \
                         -r zap-report.html \
