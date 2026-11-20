@@ -3,10 +3,15 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME = 'eva3-laweb'
-        CONTAINER_NAME = 'eva3-laweb'
-        APP_PORT = '5000'
-        TEST_PORT = '5001'
+        APP_IMAGE = "eva3-laweb:${BUILD_NUMBER}"
+        APP_CONTAINER = "eva3-laweb"
+        TEST_CONTAINER = "eva3-laweb-zap-test-${BUILD_NUMBER}"
+        ZAP_CONTAINER = "zap-scan-${BUILD_NUMBER}"
+        DOCKER_NETWORK = "zap-network-${BUILD_NUMBER}"
+
+        REPORT_DIR = "zap-reports"
+        JENKINS_REPORT_BASE = "/var/jenkins_home/zap-reports"
+        HOST_REPORT_BASE = "/var/lib/docker/volumes/jenkins_home/_data/zap-reports"
     }
 
     stages {
@@ -16,50 +21,56 @@ pipeline {
                 echo 'Construyendo imagen Docker...'
 
                 sh '''
-                    docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} .
+                    docker build -t ${APP_IMAGE} .
                 '''
             }
         }
 
         stage('Test - OWASP ZAP') {
             steps {
-                echo 'Verificando imagen Docker...'
-
-                sh '''
-                    docker image inspect ${IMAGE_NAME}:${BUILD_NUMBER}
-                '''
-
-                echo 'Preparando aplicación vulnerable para ZAP...'
+                echo 'Preparando aplicación para OWASP ZAP...'
 
                 sh '''
                     set -eu
 
-                    TEST_CONTAINER="eva3-laweb-zap-test-${BUILD_NUMBER}"
-                    ZAP_CONTAINER="zap-scan-${BUILD_NUMBER}"
+                    # Nombres y rutas de esta ejecución
+                    REPORT_PATH="${JENKINS_REPORT_BASE}/jenkins-${JOB_NAME}-${BUILD_NUMBER}"
+                    HOST_REPORT_PATH="${HOST_REPORT_BASE}/jenkins-${JOB_NAME}-${BUILD_NUMBER}"
 
                     cleanup() {
-                        docker rm -f "$TEST_CONTAINER" >/dev/null 2>&1 || true
-                        docker rm -f "$ZAP_CONTAINER" >/dev/null 2>&1 || true
+                        docker rm -f "${TEST_CONTAINER}" >/dev/null 2>&1 || true
+                        docker rm -f "${ZAP_CONTAINER}" >/dev/null 2>&1 || true
+                        docker network rm "${DOCKER_NETWORK}" >/dev/null 2>&1 || true
                     }
 
                     trap cleanup EXIT
 
-                    docker rm -f "$TEST_CONTAINER" >/dev/null 2>&1 || true
-                    docker rm -f "$ZAP_CONTAINER" >/dev/null 2>&1 || true
+                    # Limpiar posibles recursos anteriores
+                    cleanup
 
+                    # Preparar directorios de informes
+                    mkdir -p "${REPORT_PATH}"
+                    mkdir -p "${HOST_REPORT_PATH}"
+                    mkdir -p "${WORKSPACE}/${REPORT_DIR}"
+
+                    # Crear red Docker compartida
+                    docker network create "${DOCKER_NETWORK}"
+
+                    # Iniciar aplicación vulnerable dentro de la red
                     docker run -d \
-                        --name "$TEST_CONTAINER" \
-                        -p ${TEST_PORT}:5000 \
-                        ${IMAGE_NAME}:${BUILD_NUMBER}
+                        --name "${TEST_CONTAINER}" \
+                        --network "${DOCKER_NETWORK}" \
+                        "${APP_IMAGE}"
 
                     echo "Esperando que la aplicación inicie..."
 
                     APP_READY=0
 
                     for i in $(seq 1 30); do
-                        if docker exec "$TEST_CONTAINER" python -c \
+                        if docker exec "${TEST_CONTAINER}" python -c \
                             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/login', timeout=2)" \
                             >/dev/null 2>&1; then
+
                             APP_READY=1
                             break
                         fi
@@ -67,36 +78,29 @@ pipeline {
                         sleep 2
                     done
 
-                    if [ "$APP_READY" -ne 1 ]; then
-                        echo "La aplicación no respondió dentro del tiempo esperado."
-                        docker logs "$TEST_CONTAINER" || true
+                    if [ "${APP_READY}" -ne 1 ]; then
+                        echo "ERROR: La aplicación no inició correctamente."
+                        docker logs "${TEST_CONTAINER}"
                         exit 1
                     fi
 
                     echo "Aplicación disponible para el análisis."
 
-                    mkdir -p "$JENKINS_HOME/zap-reports/$BUILD_TAG"
-                    mkdir -p "$WORKSPACE/zap-reports"
-
-                    HOST_REPORT_DIR="/var/lib/docker/volumes/jenkins_home/_data/zap-reports/$BUILD_TAG"
-
                     echo "Iniciando OWASP ZAP..."
 
                     set +e
 
-                    timeout --signal=TERM --kill-after=20s 10m \
-                    docker run \
-                        --name "$ZAP_CONTAINER" \
-                        --rm \
-                        --network host \
+                    timeout --signal=TERM --kill-after=20s 10m docker run \
+                        --name "${ZAP_CONTAINER}" \
+                        --network "${DOCKER_NETWORK}" \
                         --memory=3g \
                         --memory-swap=3g \
                         --cpus=2 \
                         -e JAVA_TOOL_OPTIONS="-Xmx2048m" \
-                        -v "$HOST_REPORT_DIR:/zap/wrk/:rw" \
+                        -v "${HOST_REPORT_PATH}:/zap/wrk/:rw" \
                         ghcr.io/zaproxy/zaproxy:stable \
                         zap-full-scan.py \
-                        -t http://localhost:${TEST_PORT} \
+                        -t "http://${TEST_CONTAINER}:5000" \
                         -m 1 \
                         -T 3 \
                         -r zap-report.html \
@@ -108,22 +112,35 @@ pipeline {
 
                     set -e
 
-                    echo "Código de salida de ZAP: $ZAP_STATUS"
+                    echo "Código de salida de ZAP: ${ZAP_STATUS}"
 
-                    cp -a "$JENKINS_HOME/zap-reports/$BUILD_TAG/." \
-                        "$WORKSPACE/zap-reports/" || true
+                    # Copiar informes al workspace de Jenkins
+                    cp -a "${REPORT_PATH}/." "${WORKSPACE}/${REPORT_DIR}/" 2>/dev/null || true
 
-                    if [ "$ZAP_STATUS" -eq 124 ] || [ "$ZAP_STATUS" -eq 137 ]; then
-                        echo "El escaneo superó el tiempo máximo o fue terminado por el sistema."
+                    # Comprobar resultado del análisis
+                    if [ "${ZAP_STATUS}" -eq 124 ] || [ "${ZAP_STATUS}" -eq 137 ]; then
+                        echo "ERROR: OWASP ZAP superó el tiempo máximo permitido."
                         exit 1
                     fi
 
-                    if [ "$ZAP_STATUS" -eq 3 ]; then
-                        echo "Error durante la ejecución de OWASP ZAP."
+                    if [ "${ZAP_STATUS}" -ne 0 ]; then
+                        echo "ERROR: Falló la ejecución de OWASP ZAP."
                         exit 1
                     fi
 
-                    echo "Análisis de seguridad finalizado."
+                    # Verificar generación de informes
+                    if [ ! -s "${WORKSPACE}/${REPORT_DIR}/zap-report.html" ]; then
+                        echo "ERROR: No se generó el informe HTML."
+                        exit 1
+                    fi
+
+                    if [ ! -s "${WORKSPACE}/${REPORT_DIR}/zap-report.json" ]; then
+                        echo "ERROR: No se generó el informe JSON."
+                        exit 1
+                    fi
+
+                    echo "Análisis OWASP ZAP completado correctamente."
+                    echo "Informes HTML y JSON generados."
                 '''
             }
         }
@@ -133,14 +150,15 @@ pipeline {
                 echo 'Desplegando aplicación...'
 
                 sh '''
-                    docker stop ${CONTAINER_NAME} || true
-                    docker rm ${CONTAINER_NAME} || true
+                    docker rm -f "${APP_CONTAINER}" >/dev/null 2>&1 || true
 
                     docker run -d \
-                        --name ${CONTAINER_NAME} \
+                        --name "${APP_CONTAINER}" \
+                        -p 5000:5000 \
                         --restart unless-stopped \
-                        -p ${APP_PORT}:5000 \
-                        ${IMAGE_NAME}:${BUILD_NUMBER}
+                        "${APP_IMAGE}"
+
+                    echo "Aplicación desplegada correctamente."
                 '''
             }
         }
@@ -150,15 +168,16 @@ pipeline {
         always {
             echo 'Publicando informes de OWASP ZAP...'
 
-            archiveArtifacts artifacts: 'zap-reports/**',
-                             allowEmptyArchive: true
+            archiveArtifacts(
+                artifacts: 'zap-reports/**',
+                allowEmptyArchive: true,
+                fingerprint: true
+            )
 
             sh '''
-                docker rm -f eva3-laweb-zap-test-${BUILD_NUMBER} \
-                    >/dev/null 2>&1 || true
-
-                docker rm -f zap-scan-${BUILD_NUMBER} \
-                    >/dev/null 2>&1 || true
+                docker rm -f "${TEST_CONTAINER}" >/dev/null 2>&1 || true
+                docker rm -f "${ZAP_CONTAINER}" >/dev/null 2>&1 || true
+                docker network rm "${DOCKER_NETWORK}" >/dev/null 2>&1 || true
             '''
         }
 
