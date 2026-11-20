@@ -1,0 +1,25 @@
+APP CORREGIDA - Evaluación 3
+
+Archivos (reemplazan a los del repo):
+  app.py, init_db.py, archivo.html  -> código con las 7 vulnerabilidades corregidas
+  test_app.py                       -> prueba los 7 ataques; imprime OK o falla
+  requirements.txt                  -> TODAS las dependencias fijadas (generado desde requirements.in)
+  requirements.in                   -> dependencias directas: flask, flask-wtf, prometheus-flask-exporter, gunicorn
+  Dockerfile                        -> imagen con usuario sin privilegios y gunicorn (servidor WSGI)
+  Jenkinsfile                       -> Build -> Test (test_app.py + pip-audit) -> Deploy -> OWASP ZAP
+  monitoring/                       -> Prometheus + Grafana con tablero de seguridad ya configurado
+
+Contraseñas:
+  admin123 y 12345 ya no existen. Al arrancar, el contenedor genera contraseñas aleatorias
+  y las imprime en su log:   docker logs eva3-app
+  Para fijarlas:  docker run -e ADMIN_PASSWORD=... -e ALUMNO_PASSWORD=... -e SECRET_KEY=...
+
+Jenkins:
+  El Jenkinsfile usa los mismos nombres que el pipeline actual (eva3-laweb / eva3-app).
+  Nuevo: la etapa Test corre test_app.py y pip-audit (si hay un CVE en las dependencias, el pipeline se detiene),
+  y la etapa "Security Scan (OWASP ZAP)" escanea la app desplegada y deja zap-report.html como artefacto.
+
+Monitoreo (sin Jenkins):
+  docker compose -f monitoring/docker-compose.yml up -d --build
+  App: http://localhost:5000   Prometheus: http://localhost:9090   Grafana: http://localhost:3000
+  (tablero "EVA3 - Monitoreo de seguridad")

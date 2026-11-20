@@ -5,9 +5,11 @@ import time
 
 from flask import Flask, request, render_template_string, redirect, session
 from flask_wtf.csrf import CSRFProtect
+from prometheus_flask_exporter import PrometheusMetrics
 from werkzeug.security import check_password_hash
 
 app = Flask(__name__)
+PrometheusMetrics(app)  # expone /metrics para Prometheus/Grafana (peticiones por código HTTP, CPU, RAM)
 # Clave desde variable de entorno; si falta, una aleatoria (nunca hardcodeada en el código)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
 app.config.update(
@@ -21,6 +23,21 @@ csrf = CSRFProtect(app)
 MAX_INTENTOS, BLOQUEO_SEG = 5, 300
 # shortcut: contador en memoria, se pierde al reiniciar y no se comparte entre procesos; usar Flask-Limiter/Redis si se escala
 intentos_fallidos = {}
+
+
+@app.after_request
+def cabeceras_seguridad(resp):
+    """Cabeceras HTTP de seguridad (alertas Medium/Low de OWASP ZAP)."""
+    resp.headers.update({
+        'Content-Security-Policy': "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'",
+        'X-Frame-Options': 'DENY',
+        'X-Content-Type-Options': 'nosniff',
+        'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+        'Cross-Origin-Opener-Policy': 'same-origin',
+        'Cross-Origin-Resource-Policy': 'same-origin',
+        'Cross-Origin-Embedder-Policy': 'require-corp',
+    })
+    return resp
 
 
 def db_query(query, params=()):

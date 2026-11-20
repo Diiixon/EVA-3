@@ -1,0 +1,6 @@
+vulnerable.db
+__pycache__
+monitoring
+reportes
+Jenkinsfile
+*.md

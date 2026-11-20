@@ -1,8 +1,33 @@
 blinker==1.9.0
+    # via flask
 click==8.5.1
-Flask==3.1.3
+    # via flask
+flask==3.1.3
+    # via
+    #   -r requirements.in
+    #   flask-wtf
+    #   prometheus-flask-exporter
+flask-wtf==1.3.0
+    # via -r requirements.in
+gunicorn==27.0.1
+    # via -r requirements.in
 itsdangerous==2.2.0
-Jinja2==3.1.6
-MarkupSafe==3.0.4
-Werkzeug==3.1.9
-Flask-WTF
+    # via
+    #   flask
+    #   flask-wtf
+jinja2==3.1.6
+    # via flask
+markupsafe==3.0.4
+    # via
+    #   flask
+    #   jinja2
+    #   werkzeug
+    #   wtforms
+prometheus-client==0.26.0
+    # via prometheus-flask-exporter
+prometheus-flask-exporter==0.23.2
+    # via -r requirements.in
+werkzeug==3.1.9
+    # via flask
+wtforms==3.3.2
+    # via flask-wtf
